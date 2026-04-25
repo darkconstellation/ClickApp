@@ -27,6 +27,7 @@ applyTo:
 - Firebase Realtime Database is used for signaling only. Do not place message bodies or secrets in the signal payload.
 - Media encryption and decryption must stay client-side with CryptoJS AES.
 - For photos and videos, encrypt the actual file bytes locally before upload; only encrypted blobs may be sent or stored.
+- Browser-side media download prevention is only best-effort UX friction. If you need real protection, prefer backend access control or expiring URLs over relying on `contextmenu` suppression, drag blocking, or video control flags.
 - Keep the existing structure intact: auth is persisted with Pinia, private/work/testing chats use the shared chat flow, and `/media` is the viewer route.
 - Hardcoded app users are `mici/mi123` and `fufu/fu123`; idle logout is handled in `src/App.vue`.
 - Do not use `quasar build` to diagnose problems. Inspect the running `quasar dev` logs, HMR output, or stack traces instead.

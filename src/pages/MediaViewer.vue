@@ -82,9 +82,21 @@
           <div v-for="file in albumFiles" :key="file.id" class="col-6 col-sm-4 col-md-3 col-lg-2">
             <q-card class="file-card" dark flat bordered>
               <!-- Thumbnail / preview -->
-              <div class="file-thumb cursor-pointer" @click="openViewer(file)">
+              <div
+                class="file-thumb cursor-pointer"
+                @click="openViewer(file)"
+                @contextmenu.prevent
+                @dragstart.prevent
+              >
                 <!-- Decrypted thumbnail ready -->
-                <img v-if="thumbCache[file.id]" :src="thumbCache[file.id]" class="thumb-img" />
+                <img
+                  v-if="thumbCache[file.id]"
+                  :src="thumbCache[file.id]"
+                  class="thumb-img"
+                  draggable="false"
+                  @contextmenu.prevent
+                  @dragstart.prevent
+                />
                 <!-- Fallback icon while decrypting -->
                 <div v-else class="thumb-placeholder column items-center justify-center">
                   <q-spinner v-if="decryptingSet.has(file.id)" color="grey-5" size="24px" />
@@ -94,6 +106,9 @@
                     size="40px"
                     color="grey-6"
                   />
+                </div>
+                <div v-if="file.is_video" class="thumb-play-overlay">
+                  <q-icon name="play_circle_filled" size="48px" color="white" />
                 </div>
                 <!-- Video badge -->
                 <q-badge
@@ -198,6 +213,7 @@
         class="viewer-backdrop column items-center justify-center"
         @click.self="onViewerOverlayClick"
         @wheel.prevent="onViewerWheel"
+        @contextmenu.prevent
       >
         <!-- Header with zoom controls -->
         <div class="viewer-header row items-center q-px-md q-py-sm">
@@ -257,6 +273,9 @@
               transformOrigin: 'center center',
               cursor: viewerZoom > 1 ? (viewerPanning ? 'grabbing' : 'grab') : 'zoom-in',
             }"
+            draggable="false"
+            @contextmenu.prevent
+            @dragstart.prevent
             @mousedown.prevent="onViewerPanStart"
           />
 
@@ -266,6 +285,12 @@
             :src="viewerUrl"
             class="viewer-media"
             controls
+            controlsList="nodownload noplaybackrate noremoteplayback"
+            disablePictureInPicture
+            playsinline
+            draggable="false"
+            @contextmenu.prevent
+            @dragstart.prevent
             autoplay
           />
         </div>
@@ -301,7 +326,7 @@ import { ref, reactive, onMounted, inject } from 'vue'
 import { useQuasar } from 'quasar'
 import axios from 'axios'
 import { encryptBlob, decryptBlob } from 'src/utils/crypto'
-import { generateVideoThumbnail } from 'src/utils/video'
+import { generateImageThumbnail, generateVideoThumbnail } from 'src/utils/video'
 
 const API = 'https://fire.rftuning.id'
 const $q = useQuasar()
@@ -389,8 +414,8 @@ const loadAlbumFiles = async () => {
 
 const decryptThumb = async (file) => {
   if (thumbCache[file.id]) return
-  // For videos, use the thumbnail_url; for images, use the media_url
-  const url = file.is_video ? file.thumbnail_url : file.media_url
+  // Prefer the thumbnail_url when available, otherwise fall back to the full media file.
+  const url = file.thumbnail_url || file.media_url
   if (!url) return
   decryptingSet.add(file.id)
   try {
@@ -514,23 +539,30 @@ const onFilesSelected = async (event) => {
       // Encrypt the file
       const { encryptedBlob, originalType } = await encryptBlob(file)
 
-      // Generate encrypted thumbnail for videos (4-frame collage)
-      let encryptedThumbBlob = null
+      // Generate thumbnail for images or videos.
+      let thumbnailBlob = null
       if (isVideo) {
         try {
           const thumbBlob = await generateVideoThumbnail(file)
-          const thumbResult = await encryptBlob(thumbBlob)
-          encryptedThumbBlob = thumbResult.encryptedBlob
+          thumbnailBlob = thumbBlob
         } catch (thumbErr) {
           console.warn('Thumbnail generation failed, uploading without thumbnail', thumbErr)
+        }
+      } else {
+        try {
+          thumbnailBlob = await generateImageThumbnail(file)
+        } catch (thumbErr) {
+          console.warn('Image thumbnail generation failed, uploading without thumbnail', thumbErr)
+          thumbnailBlob = file
         }
       }
 
       // Build form data
       const formData = new FormData()
       formData.append('file', encryptedBlob, `${Date.now()}_${file.name}.enc`)
-      if (encryptedThumbBlob) {
-        formData.append('thumbnail', encryptedThumbBlob, `thumb_${Date.now()}_${file.name}.enc`)
+      if (thumbnailBlob) {
+        const { encryptedBlob: encThumb } = await encryptBlob(thumbnailBlob)
+        formData.append('thumbnail', encThumb, `thumb_${Date.now()}_${file.name}.enc`)
       }
       formData.append('filename', file.name)
       formData.append('media_type', originalType)
@@ -541,16 +573,9 @@ const onFilesSelected = async (event) => {
 
       // Add to list and cache a local thumb
       albumFiles.value.unshift(res.data)
-      if (isVideo && encryptedThumbBlob) {
-        // re-generate the raw thumb for cache (cheaper than decrypting)
-        try {
-          const rawThumb = await generateVideoThumbnail(file)
-          thumbCache[res.data.id] = URL.createObjectURL(rawThumb)
-        } catch {
-          // fall through
-        }
+      if (thumbnailBlob) {
+        thumbCache[res.data.id] = URL.createObjectURL(thumbnailBlob)
       } else {
-        // For images, use the original file as thumb
         thumbCache[res.data.id] = URL.createObjectURL(file)
       }
     } catch (e) {
@@ -635,11 +660,23 @@ const formatSize = (bytes) => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  -webkit-user-drag: none;
+  -webkit-touch-callout: none;
 }
 
 .thumb-placeholder {
   width: 100%;
   height: 100%;
+}
+
+.thumb-play-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.18);
+  pointer-events: none;
 }
 
 // Viewer
@@ -667,6 +704,8 @@ const formatSize = (bytes) => {
   object-fit: contain;
   border-radius: 4px;
   user-select: none;
+  -webkit-user-drag: none;
+  -webkit-touch-callout: none;
   transition: transform 0.1s ease;
   will-change: transform;
 }

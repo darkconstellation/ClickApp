@@ -1,4 +1,67 @@
 /**
+ * Generate a resized thumbnail from an image file.
+ * Keeps the original image format when possible so existing mime handling stays valid.
+ */
+export const generateImageThumbnail = (imageFile, maxSize = 480) => {
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+    const objectUrl = URL.createObjectURL(imageFile)
+
+    image.addEventListener('error', () => {
+      URL.revokeObjectURL(objectUrl)
+      reject(new Error('Image load error'))
+    })
+
+    image.addEventListener('load', () => {
+      const width = image.naturalWidth || image.width
+      const height = image.naturalHeight || image.height
+      if (!width || !height) {
+        URL.revokeObjectURL(objectUrl)
+        reject(new Error('Image dimensions unavailable'))
+        return
+      }
+
+      const scale = Math.min(maxSize / width, maxSize / height, 1)
+      const outputWidth = Math.max(1, Math.round(width * scale))
+      const outputHeight = Math.max(1, Math.round(height * scale))
+      const canvas = document.createElement('canvas')
+      canvas.width = outputWidth
+      canvas.height = outputHeight
+      const ctx = canvas.getContext('2d')
+
+      const mimeType =
+        imageFile.type === 'image/png' || imageFile.type === 'image/webp'
+          ? imageFile.type
+          : 'image/jpeg'
+
+      if (mimeType === 'image/jpeg') {
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(0, 0, outputWidth, outputHeight)
+      }
+
+      ctx.imageSmoothingEnabled = true
+      ctx.imageSmoothingQuality = 'high'
+      ctx.drawImage(image, 0, 0, outputWidth, outputHeight)
+
+      canvas.toBlob(
+        (blob) => {
+          URL.revokeObjectURL(objectUrl)
+          if (blob) {
+            resolve(blob)
+            return
+          }
+          reject(new Error('Canvas toBlob failed'))
+        },
+        mimeType,
+        mimeType === 'image/jpeg' ? 0.85 : undefined,
+      )
+    })
+
+    image.src = objectUrl
+  })
+}
+
+/**
  * Generate a 4-frame collage thumbnail from a video file.
  * Returns a JPEG Blob.
  */

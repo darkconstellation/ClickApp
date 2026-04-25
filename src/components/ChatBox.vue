@@ -177,8 +177,16 @@
                       v-if="thumbCache[msg.id]"
                       class="video-thumb-wrapper"
                       @click="openVideoPreview(msg)"
+                      @contextmenu.prevent
+                      @dragstart.prevent
                     >
-                      <img :src="thumbCache[msg.id]" class="chat-media-img" />
+                      <img
+                        :src="thumbCache[msg.id]"
+                        class="chat-media-img"
+                        draggable="false"
+                        @contextmenu.prevent
+                        @dragstart.prevent
+                      />
                       <div class="video-play-overlay">
                         <q-icon name="play_circle_filled" size="48px" color="white" />
                       </div>
@@ -193,6 +201,9 @@
                       v-if="mediaCache[msg.id].type.startsWith('image/')"
                       :src="mediaCache[msg.id].url"
                       class="chat-media-img"
+                      draggable="false"
+                      @contextmenu.prevent
+                      @dragstart.prevent
                       @click="openMediaPreview(mediaCache[msg.id].url, msg)"
                     />
                     <video
@@ -200,6 +211,12 @@
                       :src="mediaCache[msg.id].url"
                       class="chat-media-video"
                       controls
+                      controlsList="nodownload noplaybackrate noremoteplayback"
+                      disablePictureInPicture
+                      playsinline
+                      draggable="false"
+                      @contextmenu.prevent
+                      @dragstart.prevent
                     />
                   </div>
                   <div v-else class="text-caption text-grey-5 q-py-xs">
@@ -323,6 +340,7 @@
         class="preview-overlay column items-center justify-center"
         @click.self="onOverlayClick"
         @wheel.prevent="onPreviewWheel"
+        @contextmenu.prevent
       >
         <div class="preview-header row items-center q-px-md q-py-sm">
           <q-btn
@@ -384,6 +402,12 @@
             :src="previewVideoUrl"
             class="preview-video"
             controls
+            controlsList="nodownload noplaybackrate noremoteplayback"
+            disablePictureInPicture
+            playsinline
+            draggable="false"
+            @contextmenu.prevent
+            @dragstart.prevent
             autoplay
           />
           <!-- Image viewer -->
@@ -397,6 +421,9 @@
               transformOrigin: 'center center',
               cursor: previewZoom > 1 ? (isPanning ? 'grabbing' : 'grab') : 'zoom-in',
             }"
+            draggable="false"
+            @contextmenu.prevent
+            @dragstart.prevent
             @mousedown.prevent="onPanStart"
           />
         </div>
@@ -440,12 +467,12 @@ import { ref, computed, reactive, nextTick, onMounted, onUnmounted, watch, injec
 import { useRouter } from 'vue-router'
 import bgChat from 'src/assets/bg_chat.jpg'
 import { encryptBlob, decryptBlob } from 'src/utils/crypto'
-import { generateVideoThumbnail } from 'src/utils/video'
 import { useAuthStore } from 'stores/auth'
 import { useSettingsStore } from 'stores/settings'
 import { useUnreadStore } from 'stores/unread'
 import { useQuasar } from 'quasar'
 import { sendSignal, listenForSignal } from 'src/utils/fcm'
+import { generateImageThumbnail, generateVideoThumbnail } from 'src/utils/video'
 import axios from 'axios'
 
 const props = defineProps(['title', 'contactId', 'contactName', 'room'])
@@ -456,6 +483,11 @@ const $q = useQuasar()
 const router = useRouter()
 const toggleLeftDrawer = inject('toggleLeftDrawer')
 const chatTimeoutSeconds = computed(() => settingsStore.chatTimeoutSeconds)
+const chatUploadFolderByRoom = {
+  private: 'Private',
+  work: 'Work',
+  testing: 'Testing',
+}
 
 const messages = ref([])
 const newMessage = ref('')
@@ -1005,13 +1037,16 @@ const isVideoContent = (msg) => {
 const decryptMediaForMsg = async (msg) => {
   if (!msg.is_media || !msg.media_url) return
 
-  // For videos with thumbnails: only decrypt the thumbnail (lazy-load full video on demand)
-  if (isVideoContent(msg) && msg.thumbnail_url && !thumbCache[msg.id]) {
+  // Prefer thumbnail URLs for both images and videos when available.
+  if (msg.thumbnail_url && !thumbCache[msg.id]) {
     try {
       const res = await axios.get(`https://fire.rftuning.id${msg.thumbnail_url}`, {
         responseType: 'text',
       })
-      const blob = await decryptBlob(res.data, 'image/jpeg')
+      const colonIdx = msg.content ? msg.content.indexOf('::') : -1
+      const originalType = colonIdx !== -1 ? msg.content.substring(0, colonIdx) : 'image/png'
+      const thumbType = isVideoContent(msg) ? 'image/jpeg' : originalType
+      const blob = await decryptBlob(res.data, thumbType)
       thumbCache[msg.id] = URL.createObjectURL(blob)
     } catch (err) {
       console.error('Decrypt thumbnail error', err)
@@ -1110,6 +1145,13 @@ const onFileSelected = async (event) => {
   isUploading.value = true
   try {
     const isVideo = file.type.startsWith('video/')
+    const uploadFolder = chatUploadFolderByRoom[props.room] || props.room || ''
+    const mediaUploadUrl = uploadFolder
+      ? `https://fire.rftuning.id/media?folder=${encodeURIComponent(uploadFolder)}`
+      : 'https://fire.rftuning.id/media'
+    const thumbnailUploadUrl = uploadFolder
+      ? `https://fire.rftuning.id/media?folder=${encodeURIComponent(`${uploadFolder}/thumbnail`)}`
+      : 'https://fire.rftuning.id/media'
 
     if (isVideo) {
       // Generate 4-frame thumbnail
@@ -1123,22 +1165,19 @@ const onFileSelected = async (event) => {
       // Encrypt video
       const { encryptedBlob, originalType } = await encryptBlob(file)
 
-      // Upload video to videos folder
+      // Upload video into the room folder
       const videoForm = new FormData()
       videoForm.append('file', encryptedBlob, `${Date.now()}_${file.name}.enc`)
-      const videoRes = await axios.post('https://fire.rftuning.id/media?folder=videos', videoForm)
+      const videoRes = await axios.post(mediaUploadUrl, videoForm)
       const videoUrl = videoRes.data
 
-      // Upload encrypted thumbnail to thumbnails folder
+      // Upload encrypted thumbnail into the room thumbnail folder
       let thumbnailUrl = null
       if (thumbnailBlob) {
         const { encryptedBlob: encThumb } = await encryptBlob(thumbnailBlob)
         const thumbForm = new FormData()
         thumbForm.append('file', encThumb, `thumb_${Date.now()}_${file.name}.enc`)
-        const thumbRes = await axios.post(
-          'https://fire.rftuning.id/media?folder=thumbnails',
-          thumbForm,
-        )
+        const thumbRes = await axios.post(thumbnailUploadUrl, thumbForm)
         thumbnailUrl = thumbRes.data
       }
 
@@ -1162,13 +1201,30 @@ const onFileSelected = async (event) => {
         thumbCache[res.data.id] = URL.createObjectURL(thumbnailBlob)
       }
     } else {
-      // Image: existing flow
+      // Image: create and upload a resized thumbnail photo
+      let thumbnailBlob = null
+      try {
+        thumbnailBlob = await generateImageThumbnail(file)
+      } catch (thumbnailErr) {
+        console.warn('Image thumbnail generation failed', thumbnailErr)
+        thumbnailBlob = file
+      }
+
       const { encryptedBlob, originalType } = await encryptBlob(file)
 
       const formData = new FormData()
       formData.append('file', encryptedBlob, `${Date.now()}_${file.name}.enc`)
-      const uploadRes = await axios.post('https://fire.rftuning.id/media', formData)
+      const uploadRes = await axios.post(mediaUploadUrl, formData)
       const mediaUrl = uploadRes.data
+
+      let thumbnailUrl = null
+      if (thumbnailBlob) {
+        const { encryptedBlob: encThumb } = await encryptBlob(thumbnailBlob)
+        const thumbForm = new FormData()
+        thumbForm.append('file', encThumb, `thumb_${Date.now()}_${file.name}.enc`)
+        const thumbRes = await axios.post(thumbnailUploadUrl, thumbForm)
+        thumbnailUrl = thumbRes.data
+      }
 
       const res = await axios.post(
         `https://fire.rftuning.id/messages/${props.room}?sender_id=${currentUser.value.id}`,
@@ -1176,6 +1232,7 @@ const onFileSelected = async (event) => {
           receiver_id: props.contactId,
           content: `${originalType}::${file.name}`,
           media_url: mediaUrl,
+          thumbnail_url: thumbnailUrl,
           is_media: true,
         },
       )
@@ -1183,7 +1240,9 @@ const onFileSelected = async (event) => {
       scrollToBottom(true)
       sendSignal(props.contactId, false)
 
-      const localUrl = URL.createObjectURL(file)
+      const localUrl = thumbnailBlob
+        ? URL.createObjectURL(thumbnailBlob)
+        : URL.createObjectURL(file)
       mediaCache[res.data.id] = { url: localUrl, type: originalType }
     }
   } catch (err) {
@@ -1292,12 +1351,16 @@ const saveToAlbum = async (album) => {
   border-radius: 8px;
   cursor: pointer;
   object-fit: cover;
+  -webkit-user-drag: none;
+  -webkit-touch-callout: none;
 }
 
 .chat-media-video {
   max-width: 280px;
   max-height: 300px;
   border-radius: 8px;
+  -webkit-user-drag: none;
+  -webkit-touch-callout: none;
 }
 
 /* Idle timer */
@@ -1630,6 +1693,8 @@ const saveToAlbum = async (album) => {
   object-fit: contain;
   border-radius: 4px;
   user-select: none;
+  -webkit-user-drag: none;
+  -webkit-touch-callout: none;
   transition: transform 0.1s ease;
   will-change: transform;
 }
@@ -1638,6 +1703,8 @@ const saveToAlbum = async (album) => {
   max-width: 92vw;
   max-height: 85vh;
   border-radius: 4px;
+  -webkit-user-drag: none;
+  -webkit-touch-callout: none;
 }
 
 /* Video thumbnail wrapper in chat bubble */

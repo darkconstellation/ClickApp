@@ -467,6 +467,7 @@ import { ref, computed, reactive, nextTick, onMounted, onUnmounted, watch, injec
 import { useRouter } from 'vue-router'
 import bgChat from 'src/assets/bg_chat.jpg'
 import { encryptBlob, decryptBlob } from 'src/utils/crypto'
+import { buildMediaUrl } from 'src/utils/mediaUrl'
 import { useAuthStore } from 'stores/auth'
 import { useSettingsStore } from 'stores/settings'
 import { useUnreadStore } from 'stores/unread'
@@ -1040,7 +1041,7 @@ const decryptMediaForMsg = async (msg) => {
   // Prefer thumbnail URLs for both images and videos when available.
   if (msg.thumbnail_url && !thumbCache[msg.id]) {
     try {
-      const res = await axios.get(`https://fire.rftuning.id${msg.thumbnail_url}`, {
+      const res = await axios.get(buildMediaUrl(msg.thumbnail_url), {
         responseType: 'text',
       })
       const colonIdx = msg.content ? msg.content.indexOf('::') : -1
@@ -1055,9 +1056,8 @@ const decryptMediaForMsg = async (msg) => {
   }
 
   // For images or legacy videos without thumbnail: decrypt the full media
-  if (mediaCache[msg.id]) return
   try {
-    const res = await axios.get(`https://fire.rftuning.id${msg.media_url}`, {
+    const res = await axios.get(buildMediaUrl(msg.media_url), {
       responseType: 'text',
     })
     const colonIdx = msg.content ? msg.content.indexOf('::') : -1
@@ -1110,7 +1110,7 @@ const openVideoPreview = async (msg) => {
 
   // Decrypt the full video on demand
   try {
-    const res = await axios.get(`https://fire.rftuning.id${msg.media_url}`, {
+    const res = await axios.get(buildMediaUrl(msg.media_url), {
       responseType: 'text',
     })
     const colonIdx = msg.content ? msg.content.indexOf('::') : -1

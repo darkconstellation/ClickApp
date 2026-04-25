@@ -326,6 +326,7 @@ import { ref, reactive, onMounted, inject } from 'vue'
 import { useQuasar } from 'quasar'
 import axios from 'axios'
 import { encryptBlob, decryptBlob } from 'src/utils/crypto'
+import { buildMediaUrl } from 'src/utils/mediaUrl'
 import { generateImageThumbnail, generateVideoThumbnail } from 'src/utils/video'
 
 const API = 'https://fire.rftuning.id'
@@ -419,7 +420,7 @@ const decryptThumb = async (file) => {
   if (!url) return
   decryptingSet.add(file.id)
   try {
-    const res = await axios.get(`${API}${url}`, { responseType: 'text' })
+    const res = await axios.get(buildMediaUrl(url, API), { responseType: 'text' })
     const mimeType = file.is_video ? 'image/jpeg' : file.media_type
     const blob = await decryptBlob(res.data, mimeType)
     thumbCache[file.id] = URL.createObjectURL(blob)
@@ -493,7 +494,7 @@ const openViewer = async (file) => {
   viewerFilename.value = file.filename
   resetViewerZoom()
   try {
-    const res = await axios.get(`${API}${file.media_url}`, { responseType: 'text' })
+    const res = await axios.get(buildMediaUrl(file.media_url, API), { responseType: 'text' })
     const blob = await decryptBlob(res.data, file.media_type)
     viewerUrl.value = URL.createObjectURL(blob)
   } catch {

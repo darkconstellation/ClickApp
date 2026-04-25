@@ -65,24 +65,54 @@ export const generateImageThumbnail = (imageFile, maxSize = 480) => {
  * Generate a 4-frame collage thumbnail from a video file.
  * Returns a JPEG Blob.
  */
-export const generateVideoThumbnail = (videoFile) => {
+const VIDEO_THUMBNAIL_TIMEOUT_MS = 8000
+
+export const generateVideoThumbnail = (videoFile, timeoutMs = VIDEO_THUMBNAIL_TIMEOUT_MS) => {
   return new Promise((resolve, reject) => {
     const video = document.createElement('video')
-    video.preload = 'auto'
+    video.preload = 'metadata'
     video.muted = true
+    video.playsInline = true
+
     const objectUrl = URL.createObjectURL(videoFile)
-    video.src = objectUrl
+    let settled = false
+    let timeoutId = null
+    let captureFrame = null
 
-    video.addEventListener('error', () => {
+    const cleanup = () => {
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId)
+        timeoutId = null
+      }
+      video.removeEventListener('error', onError)
+      video.removeEventListener('loadedmetadata', onLoadedMetadata)
+      if (captureFrame) {
+        video.removeEventListener('seeked', captureFrame)
+      }
+      video.removeAttribute('src')
+      video.load()
       URL.revokeObjectURL(objectUrl)
-      reject(new Error('Video load error'))
-    })
+    }
 
-    video.addEventListener('loadedmetadata', () => {
+    const settle = (error, blob = null) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (error) {
+        reject(error)
+        return
+      }
+      resolve(blob)
+    }
+
+    function onError() {
+      settle(new Error('Video load error'))
+    }
+
+    function onLoadedMetadata() {
       const duration = video.duration
       if (!duration || duration < 1) {
-        URL.revokeObjectURL(objectUrl)
-        reject(new Error('Video too short'))
+        settle(new Error('Video too short'))
         return
       }
 
@@ -92,6 +122,11 @@ export const generateVideoThumbnail = (videoFile) => {
       canvas.width = frameW * 2
       canvas.height = frameH * 2
       const ctx = canvas.getContext('2d')
+
+      if (!ctx) {
+        settle(new Error('Canvas context unavailable'))
+        return
+      }
 
       // Seek to 4 distinct timestamps: 10%, 35%, 60%, 85%
       const times = [0.1, 0.35, 0.6, 0.85].map((p) => p * duration)
@@ -103,24 +138,41 @@ export const generateVideoThumbnail = (videoFile) => {
       ]
       let captured = 0
 
-      const captureFrame = () => {
+      captureFrame = () => {
+        if (settled) return
+
         const [x, y] = positions[captured]
         ctx.drawImage(video, x, y, frameW, frameH)
         captured++
         if (captured < 4) {
           video.currentTime = times[captured]
-        } else {
-          URL.revokeObjectURL(objectUrl)
-          canvas.toBlob(
-            (blob) => (blob ? resolve(blob) : reject(new Error('Canvas toBlob failed'))),
-            'image/jpeg',
-            0.85,
-          )
+          return
         }
+
+        canvas.toBlob(
+          (blob) => {
+            if (blob) {
+              settle(null, blob)
+              return
+            }
+            settle(new Error('Canvas toBlob failed'))
+          },
+          'image/jpeg',
+          0.85,
+        )
       }
 
       video.addEventListener('seeked', captureFrame)
       video.currentTime = times[0]
-    })
+    }
+
+    timeoutId = window.setTimeout(() => {
+      settle(new Error('Video thumbnail timeout'))
+    }, timeoutMs)
+
+    video.addEventListener('error', onError)
+    video.addEventListener('loadedmetadata', onLoadedMetadata)
+    video.src = objectUrl
+    video.load()
   })
 }

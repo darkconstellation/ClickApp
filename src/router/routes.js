@@ -1,12 +1,21 @@
 const routes = [
   {
+    path: '/login',
+    component: () => import('pages/LoginPage.vue'),
+  },
+  {
     path: '/',
     component: () => import('layouts/MainLayout.vue'),
-    children: [{ path: '', component: () => import('pages/IndexPage.vue') }],
+    meta: { requiresAuth: true },
+    children: [
+      { path: '', redirect: '/private' },
+      { path: 'private', component: () => import('pages/PrivateChat.vue') },
+      { path: 'work', component: () => import('pages/WorkChat.vue') },
+      { path: 'media', component: () => import('pages/MediaViewer.vue') },
+      { path: 'testing', component: () => import('pages/TestingChat.vue') },
+      { path: 'settings', component: () => import('pages/SettingsPage.vue') },
+    ],
   },
-
-  // Always leave this as last one,
-  // but you can also remove it
   {
     path: '/:catchAll(.*)*',
     component: () => import('pages/ErrorNotFound.vue'),

@@ -1,0 +1,21 @@
+# ClickApp (Frontend - Quasar.js)
+## Tech Stack
+- Quasar CLI / Vue 3
+
+## Features & Rules
+1. **Auth & Security:** 
+   - Hardcoded users: `smartfren`/`sf123` & `xl`/`xl123`.
+   - **Idle Detection:** 30s auto-logout on no mouse/keyboard interaction.
+2. **Layout:**
+   - Left drawer: Private, Work, Media.
+   - Private/Work: DM UI with Infinite Scroll/Lazy Loading.
+   - Media: Image/Video viewer.
+3. **Chat Features:**
+   - PING button for notification.
+   - Message status: sent (1 tick), received (2 ticks), read (2 blue ticks).
+4. **Firebase Cloud Messaging:**
+   - Signaling ONLY (silent notification). Payload must not contain message body.
+   - On `has_new_message` trigger, automatically fetch API.
+5. **Media Storage (Client-Side Encryption):**
+   - Web Crypto API to encrypt media before uploading to backend.
+   - Decrypt only via frontend viewer. Backend must never see raw files or keys.

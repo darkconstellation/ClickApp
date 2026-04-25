@@ -11,7 +11,7 @@ export default defineConfig((/* ctx */) => {
     // app boot file (/src/boot)
     // --> boot files are part of "main.js"
     // https://v2.quasar.dev/quasar-cli-vite/boot-files
-    boot: [],
+    boot: ['firebase'],
 
     // https://v2.quasar.dev/quasar-cli-vite/quasar-config-file#css
     css: ['app.scss'],
@@ -54,6 +54,19 @@ export default defineConfig((/* ctx */) => {
       // distDir
 
       // extendViteConf (viteConf) {},
+      extendViteConf(viteConf) {
+        // Deduplicate Firebase internals so all packages share one @firebase/component instance
+        viteConf.resolve = viteConf.resolve || {}
+        viteConf.resolve.dedupe = [
+          ...(viteConf.resolve.dedupe || []),
+          '@firebase/app',
+          '@firebase/component',
+          '@firebase/database',
+        ]
+        viteConf.optimizeDeps = viteConf.optimizeDeps || {}
+        viteConf.optimizeDeps.include = viteConf.optimizeDeps.include || []
+        viteConf.optimizeDeps.include.push('firebase/app', 'firebase/database')
+      },
       // viteVuePluginOptions: {},
 
       vitePlugins: [
@@ -91,7 +104,7 @@ export default defineConfig((/* ctx */) => {
       // directives: [],
 
       // Quasar plugins
-      plugins: [],
+      plugins: ['Notify'],
     },
 
     // animations: 'all', // --- includes all animations
@@ -187,7 +200,7 @@ export default defineConfig((/* ctx */) => {
       builder: {
         // https://www.electron.build/configuration
 
-        appId: 'clickclick',
+        appId: 'clickapp',
       },
     },
 

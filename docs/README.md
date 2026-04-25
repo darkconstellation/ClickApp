@@ -1,6 +1,6 @@
-# Quasar App (clickclick)
+# ClickApp (clickapp)
 
-Click Click
+ClickApp
 
 ## Install the dependencies
 

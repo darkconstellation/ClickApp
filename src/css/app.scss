@@ -1,1 +1,19 @@
 // app global css in SCSS form
+@use 'quasar.variables' as v;
+
+// Prevent horizontal scroll on mobile
+html,
+body,
+#q-app {
+  overflow-x: hidden !important;
+  max-width: 100vw;
+}
+
+.bg-green-10 {
+  background: #154d38 !important;
+}
+
+.bg-grey-9 {
+  background: #242626 !important;
+  // color: #fafafa !important;
+}

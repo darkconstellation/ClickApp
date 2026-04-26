@@ -123,7 +123,7 @@
 
               <!-- File info -->
               <q-card-section class="q-pa-xs">
-                <div class="text-caption text-grey-4 ellipsis">{{ file.filename }}</div>
+                <div class="text-caption text-grey-4 ellipsis">{{ formatFileTimestamp(file) }}</div>
                 <div class="row items-center justify-between">
                   <span class="text-caption text-grey-6">{{ formatSize(file.file_size) }}</span>
                   <q-btn
@@ -154,44 +154,79 @@
     />
 
     <!-- ===== PASSWORD DIALOG ===== -->
-    <q-dialog v-model="passwordDialog" persistent>
-      <q-card dark style="min-width: 320px" class="bg-grey-10">
-        <q-card-section>
-          <div class="text-h6 text-white">
-            <q-icon name="lock" color="amber" class="q-mr-sm" />
-            {{ pendingAlbum?.name }}
+    <q-dialog
+      v-model="passwordDialog"
+      persistent
+      transition-show="scale"
+      transition-hide="scale"
+      @hide="resetPasswordPrompt"
+    >
+      <q-card dark class="album-password-card">
+        <div class="album-password-card__glow" />
+
+        <q-card-section class="album-password-card__hero row items-start no-wrap">
+          <div class="password-badge shrink-0">
+            <q-icon name="lock" size="22px" color="black" />
           </div>
-          <div class="text-caption text-grey-5">Enter password to access this album</div>
+
+          <div class="q-ml-md column justify-center">
+            <div class="text-overline text-amber-3 q-mb-xs">Locked album</div>
+            <div class="text-h5 text-white text-weight-medium">
+              {{ pendingAlbum?.name }}
+            </div>
+            <div class="text-body2 text-grey-4 q-mt-xs password-subtitle">
+              Enter the shared password to open this folder.
+            </div>
+          </div>
         </q-card-section>
-        <q-card-section>
+
+        <q-separator dark class="password-divider" />
+
+        <q-card-section class="album-password-card__body q-pt-lg">
           <q-input
             v-model="passwordInput"
             dark
-            outlined
-            dense
-            :type="showPwd ? 'text' : 'password'"
-            label="Password"
+            filled
+            rounded-borders
+            type="text"
+            label="Album password"
             color="amber"
+            autocomplete="new-password"
+            name="album-password"
+            autocapitalize="off"
+            autocorrect="off"
+            spellcheck="false"
+            :error="!!pwdError"
+            :error-message="pwdError"
             @keyup.enter="submitPassword"
             autofocus
+            class="password-field"
+            :class="{ 'password-field--masked': !showPwd }"
           >
+            <template #prepend>
+              <q-icon name="vpn_key" color="grey-5" />
+            </template>
             <template #append>
               <q-icon
                 :name="showPwd ? 'visibility_off' : 'visibility'"
-                class="cursor-pointer"
+                class="cursor-pointer text-grey-4"
                 @click="showPwd = !showPwd"
               />
             </template>
           </q-input>
-          <div v-if="pwdError" class="text-negative text-caption q-mt-xs">
-            {{ pwdError }}
+
+          <div class="password-note row items-center q-mt-sm text-grey-5">
+            <q-icon name="shield" size="16px" />
+            <span>Password is used only for this session.</span>
           </div>
         </q-card-section>
-        <q-card-actions align="right">
-          <q-btn flat label="Cancel" color="grey-5" @click="passwordDialog = false" />
+
+        <q-card-actions align="between" class="album-password-card__actions">
+          <q-btn flat label="Cancel" color="grey-4" @click="passwordDialog = false" />
           <q-btn
             unelevated
             label="Unlock"
+            icon="lock_open"
             color="amber"
             text-color="black"
             :loading="pwdLoading"
@@ -482,10 +517,20 @@ const pwdError = ref('')
 const pwdLoading = ref(false)
 const pendingAlbum = ref(null)
 
+const resetPasswordPrompt = () => {
+  passwordInput.value = ''
+  showPwd.value = false
+  pwdError.value = ''
+  pwdLoading.value = false
+  pendingAlbum.value = null
+}
+
 const promptPassword = (album) => {
   pendingAlbum.value = album
   passwordInput.value = ''
   pwdError.value = ''
+  showPwd.value = false
+  pwdLoading.value = false
   passwordDialog.value = true
 }
 
@@ -498,6 +543,7 @@ const submitPassword = async () => {
       password: passwordInput.value,
     })
     currentAlbum.value = pendingAlbum.value
+    passwordInput.value = ''
     passwordDialog.value = false
     loadAlbumFiles()
   } catch (e) {
@@ -914,6 +960,86 @@ const formatSize = (bytes) => {
     border-color: rgba(255, 193, 7, 0.3);
     transform: translateY(-2px);
   }
+}
+
+.album-password-card {
+  position: relative;
+  width: min(92vw, 440px);
+  overflow: hidden;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 193, 7, 0.16);
+  background:
+    radial-gradient(circle at top left, rgba(255, 193, 7, 0.15), transparent 42%),
+    linear-gradient(180deg, rgba(28, 29, 32, 0.98), rgba(16, 16, 18, 0.98));
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.5);
+}
+
+.album-password-card__glow {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 20% 10%, rgba(255, 193, 7, 0.2), transparent 24%),
+    radial-gradient(circle at 95% 0%, rgba(255, 255, 255, 0.08), transparent 18%);
+  pointer-events: none;
+}
+
+.album-password-card__hero,
+.album-password-card__body,
+.album-password-card__actions {
+  position: relative;
+  z-index: 1;
+}
+
+.album-password-card__hero {
+  padding: 22px 24px 18px;
+}
+
+.album-password-card__body {
+  padding: 20px 24px 8px;
+}
+
+.album-password-card__actions {
+  padding: 0 24px 24px;
+}
+
+.password-badge {
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #ffd54f, #ffb300);
+  box-shadow: 0 14px 28px rgba(255, 193, 7, 0.28);
+}
+
+.password-subtitle {
+  line-height: 1.45;
+}
+
+.password-divider {
+  opacity: 0.35;
+}
+
+.password-field :deep(.q-field__control) {
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.password-field--masked :deep(.q-field__native) {
+  -webkit-text-security: disc;
+}
+
+.password-field :deep(.q-field__native),
+.password-field :deep(.q-field__prefix),
+.password-field :deep(.q-field__suffix),
+.password-field :deep(.q-field__label) {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.password-note {
+  gap: 8px;
+  font-size: 12px;
 }
 
 .file-card {

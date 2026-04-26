@@ -7,6 +7,7 @@
       backgroundSize: 'auto',
       backgroundPosition: 'top left',
       backgroundRepeat: 'repeat',
+      '--chat-viewport-height': chatViewportHeight,
     }"
   >
     <!-- Header (col-auto: does NOT scroll) -->
@@ -45,7 +46,12 @@
     </div>
 
     <!-- Chat scroll area: ONLY this div scrolls -->
-    <div class="col chat-scroll" ref="scrollContainer" @scroll="onScroll">
+    <div
+      class="col chat-scroll"
+      ref="scrollContainer"
+      @scroll="onScroll"
+      @click="handleChatBodyClick"
+    >
       <!-- Top sentinel: loading indicator / beginning of conversation -->
       <div class="row justify-center q-py-sm">
         <q-spinner v-if="isLoadingOlder" color="grey-5" size="24px" />
@@ -289,15 +295,16 @@
         >
           <q-spinner size="14px" class="q-mr-xs" /> Encrypting & uploading...
         </div>
-        <q-form @submit.prevent="sendMessage" class="row items-center q-pa-xs" style="gap: 4px">
+        <q-form @submit.prevent="sendMessage" class="row items-center q-pa-xs composer-row">
           <div class="col-auto">
             <q-btn
+              class="composer-action-btn composer-action-btn--attach"
               round
-              dense
               flat
               icon="add"
               color="grey-1"
               size="md"
+              type="button"
               @click="triggerFileUpload"
             />
           </div>
@@ -315,7 +322,15 @@
             />
           </div>
           <div class="col-auto">
-            <q-btn round dense flat icon="send" color="grey-1" size="md" @click="sendMessage" />
+            <q-btn
+              class="composer-action-btn composer-action-btn--send"
+              round
+              flat
+              icon="send"
+              color="grey-1"
+              size="md"
+              type="submit"
+            />
           </div>
         </q-form>
         <input
@@ -520,11 +535,44 @@ const previewIsVideo = ref(false)
 const previewVideoUrl = ref('')
 const previewVideoLoading = ref(false)
 const previewMsg = ref(null)
+const chatViewportHeight = ref('100vh')
 let panStartX = 0
 let panStartY = 0
 let panOriginX = 0
 let panOriginY = 0
 let didPan = false
+let viewportHeightRaf = null
+
+const focusMessageInput = async () => {
+  await nextTick()
+  requestAnimationFrame(() => {
+    messageInputRef.value?.focus?.()
+  })
+}
+
+const shouldIgnoreChatBodyFocus = (target) =>
+  Boolean(
+    target?.closest?.(
+      'button, a, input, textarea, select, video, [role="button"], [contenteditable="true"], .q-btn',
+    ),
+  )
+
+const handleChatBodyClick = (event) => {
+  if (shouldIgnoreChatBodyFocus(event.target)) return
+  focusMessageInput()
+}
+
+const updateChatViewportHeight = () => {
+  if (typeof window === 'undefined') return
+  const viewportHeight = window.visualViewport?.height || window.innerHeight
+  if (!viewportHeight) return
+  chatViewportHeight.value = `${Math.round(viewportHeight)}px`
+}
+
+const scheduleChatViewportHeightUpdate = () => {
+  if (viewportHeightRaf) cancelAnimationFrame(viewportHeightRaf)
+  viewportHeightRaf = requestAnimationFrame(updateChatViewportHeight)
+}
 
 const resetZoom = () => {
   previewZoom.value = 1
@@ -793,6 +841,8 @@ const sendMessage = async () => {
   } catch (err) {
     console.error(err)
     $q.notify({ type: 'negative', message: 'Failed to send message' })
+  } finally {
+    focusMessageInput()
   }
 }
 
@@ -805,13 +855,12 @@ const sendPing = async () => {
 
 const setReplyTo = (msg) => {
   replyingTo.value = msg
-  nextTick(() => {
-    messageInputRef.value?.focus()
-  })
+  focusMessageInput()
 }
 
 const cancelReply = () => {
   replyingTo.value = null
+  focusMessageInput()
 }
 
 const scrollToMessage = (msgId) => {
@@ -943,6 +992,7 @@ watch(chatTimeoutSeconds, resetIdleCountdown, { immediate: true })
 // ---------- Lifecycle ----------
 
 onMounted(async () => {
+  updateChatViewportHeight()
   await loadInitial()
   if (currentUser.value.id) {
     stopListening = listenForSignal(currentUser.value.id, () => {
@@ -951,6 +1001,10 @@ onMounted(async () => {
   }
   resetIdleCountdown()
   startIdleCountdown()
+  window.addEventListener('resize', scheduleChatViewportHeightUpdate)
+  window.addEventListener('orientationchange', scheduleChatViewportHeightUpdate)
+  window.visualViewport?.addEventListener('resize', scheduleChatViewportHeightUpdate)
+  window.visualViewport?.addEventListener('scroll', scheduleChatViewportHeightUpdate)
   window.addEventListener('mousemove', resetIdleCountdown)
   window.addEventListener('keydown', resetIdleCountdown)
   window.addEventListener('click', resetIdleCountdown)
@@ -961,6 +1015,11 @@ onUnmounted(() => {
   if (stopListening) stopListening()
   stopTitleBlink()
   stopIdleCountdown()
+  if (viewportHeightRaf) cancelAnimationFrame(viewportHeightRaf)
+  window.removeEventListener('resize', scheduleChatViewportHeightUpdate)
+  window.removeEventListener('orientationchange', scheduleChatViewportHeightUpdate)
+  window.visualViewport?.removeEventListener('resize', scheduleChatViewportHeightUpdate)
+  window.visualViewport?.removeEventListener('scroll', scheduleChatViewportHeightUpdate)
   window.removeEventListener('mousemove', resetIdleCountdown)
   window.removeEventListener('keydown', resetIdleCountdown)
   window.removeEventListener('click', resetIdleCountdown)
@@ -1250,6 +1309,7 @@ const onFileSelected = async (event) => {
     $q.notify({ type: 'negative', message: 'Failed to send media' })
   } finally {
     isUploading.value = false
+    focusMessageInput()
   }
 }
 
@@ -1304,10 +1364,18 @@ const saveToAlbum = async (album) => {
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
-  height: 100vh;
+  height: var(--chat-viewport-height, 100vh);
+  min-height: var(--chat-viewport-height, 100vh);
   overflow: hidden;
   overflow-x: hidden;
   position: relative;
+}
+
+@supports (height: 100dvh) {
+  .chat-container {
+    height: 100dvh;
+    min-height: 100dvh;
+  }
 }
 
 /* The only scrollable element */
@@ -1382,9 +1450,36 @@ const saveToAlbum = async (album) => {
 .send-area {
   background-color: rgba(0, 0, 0, 0);
   padding: 3px 5px;
+  padding-bottom: calc(3px + env(safe-area-inset-bottom, 0px));
   overflow-x: hidden;
   width: 100%;
   box-sizing: border-box;
+}
+
+.composer-row {
+  gap: 8px;
+}
+
+.composer-action-btn {
+  width: 48px;
+  min-width: 48px;
+  height: 48px;
+  min-height: 48px;
+  padding: 0;
+  flex-shrink: 0;
+  border-radius: 999px;
+}
+
+.composer-action-btn--attach {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.composer-action-btn--send {
+  background: rgba(0, 168, 132, 0.18);
+}
+
+.composer-action-btn--send:hover {
+  background: rgba(0, 168, 132, 0.28);
 }
 
 .send-area-inner {

@@ -8,6 +8,11 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from 'stores/auth'
 import { useSettingsStore } from 'stores/settings'
 import { useQuasar } from 'quasar'
+import {
+  clearPushUserContext,
+  registerPushSubscription,
+  syncPushUserContext,
+} from 'src/utils/notifications'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -40,6 +45,20 @@ const resetIdleTimer = () => {
 }
 
 watch(currentIdleTimeoutSeconds, resetIdleTimer, { immediate: true })
+
+watch(
+  () => authStore.user?.id,
+  async (userId) => {
+    if (!userId) {
+      await clearPushUserContext()
+      return
+    }
+
+    await syncPushUserContext(userId)
+    void registerPushSubscription(userId)
+  },
+  { immediate: true },
+)
 
 // Watch route and apply dark theme unless on login page
 watch(

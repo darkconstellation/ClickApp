@@ -1,7 +1,10 @@
 <template>
   <div
     class="chat-container column"
-    :class="{ 'shake-animation': isShaking }"
+    :class="{
+      'shake-animation': isShaking,
+      'chat-container--keyboard-open': isKeyboardOpen,
+    }"
     :style="{
       backgroundImage: `url(${bgChat})`,
       backgroundSize: 'auto',
@@ -12,7 +15,7 @@
   >
     <!-- Header (col-auto: does NOT scroll) -->
     <div
-      class="col-auto q-pa-sm text-white row items-center"
+      class="chat-header col-auto q-pa-sm text-white row items-center"
       style="width: 100%; background-color: #161717"
     >
       <q-btn dense round unelevated icon="menu" color="grey-9" @click="toggleLeftDrawer" />
@@ -31,7 +34,7 @@
         />
         <q-circular-progress
           :value="(idleCountdown / chatTimeoutSeconds) * 100"
-          size="28px"
+          :size="isKeyboardOpen ? '24px' : '28px'"
           :thickness="0.25"
           :color="idleCountdown <= 5 ? 'negative' : idleCountdown <= 10 ? 'warning' : 'orange-10'"
           track-color="grey-6"
@@ -488,6 +491,7 @@ import { useSettingsStore } from 'stores/settings'
 import { useUnreadStore } from 'stores/unread'
 import { useQuasar } from 'quasar'
 import { sendSignal, listenForSignal } from 'src/utils/fcm'
+import { showSystemNotification } from 'src/utils/notifications'
 import { generateImageThumbnail, generateVideoThumbnail, isVideoFile } from 'src/utils/video'
 import axios from 'axios'
 
@@ -504,6 +508,9 @@ const chatUploadFolderByRoom = {
   work: 'Work',
   testing: 'Testing',
 }
+const notificationIdleThresholdSeconds = computed(() =>
+  Math.max(5, Math.floor(chatTimeoutSeconds.value / 3)),
+)
 
 const messages = ref([])
 const newMessage = ref('')
@@ -536,6 +543,7 @@ const previewVideoUrl = ref('')
 const previewVideoLoading = ref(false)
 const previewMsg = ref(null)
 const chatViewportHeight = ref('100vh')
+const isKeyboardOpen = ref(false)
 let panStartX = 0
 let panStartY = 0
 let panOriginX = 0
@@ -564,9 +572,16 @@ const handleChatBodyClick = (event) => {
 
 const updateChatViewportHeight = () => {
   if (typeof window === 'undefined') return
-  const viewportHeight = window.visualViewport?.height || window.innerHeight
+  const visualViewport = window.visualViewport
+  const viewportHeight = visualViewport?.height || window.innerHeight
   if (!viewportHeight) return
   chatViewportHeight.value = `${Math.round(viewportHeight)}px`
+
+  const layoutHeight = window.innerHeight || viewportHeight
+  const keyboardOpen = Boolean(visualViewport && layoutHeight - viewportHeight > 120)
+  if (isKeyboardOpen.value !== keyboardOpen) {
+    isKeyboardOpen.value = keyboardOpen
+  }
 }
 
 const scheduleChatViewportHeightUpdate = () => {
@@ -762,8 +777,13 @@ const fetchUpdates = async () => {
     messages.value = [...messages.value, ...newMsgs]
 
     const incomingToMe = newMsgs.filter((m) => m.receiver_id === currentUser.value.id)
+    const pageIsActive = typeof document !== 'undefined' && !document.hidden && document.hasFocus()
 
-    if (isAtBottom.value) {
+    if (incomingToMe.length > 0) {
+      await showIncomingSystemNotification(incomingToMe)
+    }
+
+    if (isAtBottom.value && pageIsActive) {
       // Auto-scroll and mark as read immediately
       scrollToBottom(true)
       if (incomingToMe.length > 0) {
@@ -958,6 +978,81 @@ const triggerPingEffects = () => {
   if (!document.hasFocus()) startTitleBlink()
 }
 
+const getNotificationTargetUrl = () => {
+  if (typeof window === 'undefined') {
+    return `/#/${props.room}`
+  }
+
+  return `${window.location.origin}/#/${props.room}`
+}
+
+const getMessagePreview = (msg) => {
+  if (!msg) return 'New message'
+  if (msg.content === 'PING!') return 'PING!'
+  if (msg.is_media) return 'Media message'
+  if (!msg.content) return 'New message'
+  return msg.content.length > 80 ? `${msg.content.substring(0, 80)}...` : msg.content
+}
+
+const shouldShowSystemNotification = () => {
+  if (typeof document === 'undefined') return false
+
+  if (document.visibilityState !== 'visible') return false
+
+  return idleCountdown.value <= notificationIdleThresholdSeconds.value
+}
+
+const showIncomingSystemNotification = async (incomingMessages) => {
+  if (!incomingMessages || incomingMessages.length === 0) return
+  if (!shouldShowSystemNotification()) return
+
+  const latestMessage = incomingMessages[incomingMessages.length - 1]
+  const contactLabel = props.contactName || 'Contact'
+  const hasPing = incomingMessages.some((msg) => msg.content === 'PING!')
+  const preview = getMessagePreview(latestMessage)
+
+  await showSystemNotification({
+    title: hasPing
+      ? `${contactLabel} sent a PING!`
+      : incomingMessages.length > 1
+        ? `${contactLabel} sent ${incomingMessages.length} new messages`
+        : `${contactLabel} sent a message`,
+    body:
+      incomingMessages.length > 1 && preview
+        ? `${incomingMessages.length} new messages · ${preview}`
+        : preview,
+    tag: `${props.room}:${currentUser.value.id}:${props.contactId}`,
+    data: {
+      room: props.room,
+      contactId: props.contactId,
+      url: getNotificationTargetUrl(),
+    },
+    requireInteraction: hasPing,
+    vibrate: hasPing ? [300, 100, 300, 100, 300] : [200, 80, 200],
+  })
+}
+
+const syncReadStateWhenActive = async () => {
+  if (!props.contactId || !currentUser.value.id) return
+  if (typeof document === 'undefined' || document.hidden || !document.hasFocus()) return
+  if (!isAtBottom.value) return
+
+  const unread = messages.value.filter(
+    (m) => m.receiver_id === currentUser.value.id && m.status !== 'read',
+  )
+
+  if (unread.length === 0) return
+
+  await markRead(unread)
+  unread.forEach((m) => (m.status = 'read'))
+  newUnreadCount.value = 0
+  showScrollDown.value = false
+
+  if (props.contactId) {
+    sendSignal(props.contactId, false)
+  }
+}
+
 // ---------- Idle countdown timer ----------
 
 const idleCountdown = ref(chatTimeoutSeconds.value)
@@ -995,8 +1090,14 @@ onMounted(async () => {
   updateChatViewportHeight()
   await loadInitial()
   if (currentUser.value.id) {
+    let ignoreInitialSignal = true
     stopListening = listenForSignal(currentUser.value.id, () => {
-      fetchUpdates()
+      if (ignoreInitialSignal) {
+        ignoreInitialSignal = false
+        return
+      }
+
+      void fetchUpdates()
     })
   }
   resetIdleCountdown()
@@ -1009,6 +1110,8 @@ onMounted(async () => {
   window.addEventListener('keydown', resetIdleCountdown)
   window.addEventListener('click', resetIdleCountdown)
   window.addEventListener('scroll', resetIdleCountdown)
+  window.addEventListener('focus', syncReadStateWhenActive)
+  document.addEventListener('visibilitychange', syncReadStateWhenActive)
 })
 
 onUnmounted(() => {
@@ -1024,6 +1127,8 @@ onUnmounted(() => {
   window.removeEventListener('keydown', resetIdleCountdown)
   window.removeEventListener('click', resetIdleCountdown)
   window.removeEventListener('scroll', resetIdleCountdown)
+  window.removeEventListener('focus', syncReadStateWhenActive)
+  document.removeEventListener('visibilitychange', syncReadStateWhenActive)
 })
 
 // Reset when contact changes (e.g. navigating between chat pages)
@@ -1371,6 +1476,11 @@ const saveToAlbum = async (album) => {
   position: relative;
 }
 
+.chat-header {
+  min-height: 56px;
+  gap: 8px;
+}
+
 @supports (height: 100dvh) {
   .chat-container {
     height: 100dvh;
@@ -1488,6 +1598,82 @@ const saveToAlbum = async (album) => {
   overflow-x: hidden;
   width: 100%;
   box-sizing: border-box;
+}
+
+.chat-container--keyboard-open .chat-header {
+  padding-top: 4px !important;
+  padding-bottom: 4px !important;
+  min-height: 44px;
+  gap: 6px;
+}
+
+.chat-container--keyboard-open .chat-header .text-subtitle1 {
+  font-size: 0.95rem;
+  line-height: 1.1;
+}
+
+.chat-container--keyboard-open .chat-header :deep(.q-btn) {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
+}
+
+.chat-container--keyboard-open .chat-header :deep(.q-circular-progress) {
+  width: 24px !important;
+  height: 24px !important;
+}
+
+.chat-container--keyboard-open .chat-header .idle-timer-text {
+  font-size: 9px;
+}
+
+.chat-container--keyboard-open .reply-bar {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.chat-container--keyboard-open .reply-bar .text-caption {
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.chat-container--keyboard-open .reply-bar .q-btn {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+}
+
+.chat-container--keyboard-open .send-area {
+  padding-top: 2px;
+  padding-bottom: calc(2px + env(safe-area-inset-bottom, 0px));
+}
+
+.chat-container--keyboard-open .send-area-inner {
+  border-radius: 26px;
+}
+
+.chat-container--keyboard-open .composer-row {
+  gap: 6px;
+}
+
+.chat-container--keyboard-open .composer-action-btn {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+}
+
+.chat-container--keyboard-open .message-input :deep(.q-field__control) {
+  min-height: 40px;
+  height: 40px;
+}
+
+.chat-container--keyboard-open .message-input :deep(.q-field__native),
+.chat-container--keyboard-open .message-input :deep(textarea) {
+  padding-top: 6px;
+  padding-bottom: 6px;
 }
 
 /* FAB scroll-to-bottom button */

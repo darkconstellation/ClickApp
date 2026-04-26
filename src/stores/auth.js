@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import axios from 'axios'
+import { clearPushSubscription } from 'src/utils/notifications'
 
 export const useAuthStore = defineStore('auth', {
   state: () => ({
@@ -22,7 +23,11 @@ export const useAuthStore = defineStore('auth', {
       this.router.push('/private')
     },
     logout() {
+      const currentUserId = this.user?.id
       this.user = null
+      if (currentUserId) {
+        void clearPushSubscription(currentUserId)
+      }
       this.router.push('/login')
     },
   },

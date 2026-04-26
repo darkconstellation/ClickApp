@@ -116,6 +116,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { useAuthStore } from 'stores/auth'
 import { useQuasar } from 'quasar'
 import { listenForSignal } from 'src/utils/fcm'
+import { registerPushSubscription, requestNotificationPermission } from 'src/utils/notifications'
 import axios from 'axios'
 
 const authStore = useAuthStore()
@@ -227,9 +228,20 @@ const fetchUnreadCount = async () => {
 
 const onSubmit = async () => {
   loading.value = true
+  const notificationPermissionPromise =
+    typeof window !== 'undefined' &&
+    typeof Notification !== 'undefined' &&
+    Notification.permission === 'default'
+      ? requestNotificationPermission()
+      : Promise.resolve(
+          typeof Notification !== 'undefined' ? Notification.permission : 'unsupported',
+        )
+
   try {
+    await notificationPermissionPromise
     const user = username.value || (lastUser.value ? lastUser.value.username : '')
     await authStore.login(user, password.value)
+    void registerPushSubscription(authStore.user?.id)
   } catch (error) {
     console.error(error)
     $q.notify({ type: 'negative', message: 'Login failed' })

@@ -207,7 +207,7 @@
       maximized
       transition-show="fade"
       transition-hide="fade"
-      @hide="resetViewerZoom"
+      @hide="onViewerDialogHide"
     >
       <div
         class="viewer-backdrop column items-center justify-center"
@@ -255,7 +255,14 @@
         </div>
 
         <!-- Body -->
-        <div class="viewer-body col column items-center justify-center" style="overflow: hidden">
+        <div
+          class="viewer-body col column items-center justify-center"
+          style="overflow: hidden"
+          @touchstart="onViewerTouchStart"
+          @touchmove="onViewerTouchMove"
+          @touchend="onViewerTouchEnd"
+          @touchcancel="onViewerTouchCancel"
+        >
           <!-- Loading -->
           <div v-if="viewerLoading" class="column items-center">
             <q-spinner color="amber" size="64px" />
@@ -293,11 +300,36 @@
             @dragstart.prevent
             autoplay
           />
+
+          <template v-if="$q.platform.is.desktop">
+            <q-btn
+              v-if="canGoPreviousMedia"
+              class="viewer-nav viewer-nav--left"
+              round
+              flat
+              icon="chevron_left"
+              color="white"
+              size="lg"
+              :disable="viewerLoading"
+              @click.stop="goToPreviousMedia"
+            />
+            <q-btn
+              v-if="canGoNextMedia"
+              class="viewer-nav viewer-nav--right"
+              round
+              flat
+              icon="chevron_right"
+              color="white"
+              size="lg"
+              :disable="viewerLoading"
+              @click.stop="goToNextMedia"
+            />
+          </template>
         </div>
 
-        <!-- Filename -->
-        <div v-if="viewerFilename" class="viewer-filename text-grey-4">
-          {{ viewerFilename }}
+        <!-- Metadata timestamp -->
+        <div v-if="viewerTimestampLabel" class="viewer-filename text-grey-4">
+          {{ viewerTimestampLabel }}
         </div>
       </div>
     </q-dialog>
@@ -322,16 +354,107 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, inject } from 'vue'
+import { computed, ref, reactive, onMounted, onBeforeUnmount, inject, nextTick } from 'vue'
 import { useQuasar } from 'quasar'
 import axios from 'axios'
 import { encryptBlob, decryptBlob } from 'src/utils/crypto'
 import { buildMediaUrl } from 'src/utils/mediaUrl'
-import { generateImageThumbnail, generateVideoThumbnail } from 'src/utils/video'
+import { generateImageThumbnail, generateVideoThumbnail, isVideoFile } from 'src/utils/video'
 
 const API = 'https://fire.rftuning.id'
 const $q = useQuasar()
 const toggleLeftDrawer = inject('toggleLeftDrawer')
+
+const extractFileTimestamp = (file) => {
+  if (!file) return null
+
+  const metadata = file.metadata || {}
+  return (
+    metadata.timestamp ??
+    metadata.created_at ??
+    metadata.uploaded_at ??
+    metadata.createdAt ??
+    metadata.uploadedAt ??
+    file.timestamp ??
+    file.created_at ??
+    file.uploaded_at ??
+    file.createdAt ??
+    file.uploadedAt ??
+    null
+  )
+}
+
+const toTimestampMs = (value) => {
+  if (value === null || value === undefined || value === '') return null
+
+  if (value instanceof Date) {
+    const timestamp = value.getTime()
+    return Number.isNaN(timestamp) ? null : timestamp
+  }
+
+  if (typeof value === 'number') {
+    return value < 1e12 ? value * 1000 : value
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return null
+
+    if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+      const numeric = Number(trimmed)
+      if (Number.isFinite(numeric)) {
+        return numeric < 1e12 ? numeric * 1000 : numeric
+      }
+    }
+
+    const parsed = Date.parse(trimmed)
+    return Number.isNaN(parsed) ? null : parsed
+  }
+
+  if (typeof value === 'object') {
+    if (typeof value.toDate === 'function') {
+      const date = value.toDate()
+      if (date instanceof Date && !Number.isNaN(date.getTime())) {
+        return date.getTime()
+      }
+    }
+
+    if (typeof value.seconds === 'number') {
+      const nanoseconds = typeof value.nanoseconds === 'number' ? value.nanoseconds : 0
+      return value.seconds * 1000 + Math.floor(nanoseconds / 1e6)
+    }
+
+    if ('timestamp' in value || 'created_at' in value || 'uploaded_at' in value) {
+      return toTimestampMs(extractFileTimestamp(value))
+    }
+  }
+
+  return null
+}
+
+const getFileTimestampMs = (file) => toTimestampMs(extractFileTimestamp(file))
+
+const sortAlbumFilesByTimestamp = (files = []) =>
+  [...files].sort((left, right) => {
+    const rightMs = getFileTimestampMs(right)
+    const leftMs = getFileTimestampMs(left)
+
+    if (rightMs !== leftMs) {
+      return (rightMs ?? 0) - (leftMs ?? 0)
+    }
+
+    return String(right?.id ?? '').localeCompare(String(left?.id ?? ''))
+  })
+
+const formatFileTimestamp = (file) => {
+  const timestampMs = getFileTimestampMs(file)
+  if (!timestampMs) return ''
+
+  return new Date(timestampMs).toLocaleString('en-GB', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  })
+}
 
 // ─── Album list ───
 const albums = ref([])
@@ -403,7 +526,7 @@ const loadAlbumFiles = async () => {
   loadingFiles.value = true
   try {
     const res = await axios.get(`${API}/albums/${currentAlbum.value.id}/files`)
-    albumFiles.value = res.data
+    albumFiles.value = sortAlbumFilesByTimestamp(res.data)
     // Decrypt thumbnails in background
     albumFiles.value.forEach((f) => decryptThumb(f))
   } catch {
@@ -436,16 +559,51 @@ const viewerDialog = ref(false)
 const viewerUrl = ref(null)
 const viewerIsVideo = ref(false)
 const viewerLoading = ref(false)
-const viewerFilename = ref('')
+const viewerFileId = ref(null)
 const viewerZoom = ref(1)
 const viewerPanX = ref(0)
 const viewerPanY = ref(0)
 const viewerPanning = ref(false)
+let viewerLoadToken = 0
 let vPanStartX = 0
 let vPanStartY = 0
 let vPanOriginX = 0
 let vPanOriginY = 0
 let vDidPan = false
+let vDidSwipe = false
+let viewerTouchStartX = 0
+let viewerTouchStartY = 0
+let viewerTouchMoved = false
+
+const viewerCurrentIndex = computed(() =>
+  albumFiles.value.findIndex((file) => file.id === viewerFileId.value),
+)
+
+const viewerCurrentFile = computed(() =>
+  viewerCurrentIndex.value >= 0 ? albumFiles.value[viewerCurrentIndex.value] : null,
+)
+
+const viewerTimestampLabel = computed(() =>
+  viewerCurrentFile.value ? formatFileTimestamp(viewerCurrentFile.value) : '',
+)
+
+const canGoPreviousMedia = computed(() => viewerCurrentIndex.value > 0)
+
+const canGoNextMedia = computed(
+  () => viewerCurrentIndex.value >= 0 && viewerCurrentIndex.value < albumFiles.value.length - 1,
+)
+
+const revokeViewerUrl = (url = viewerUrl.value) => {
+  if (typeof url === 'string' && url.startsWith('blob:')) {
+    URL.revokeObjectURL(url)
+  }
+}
+
+const cleanupViewerGestureState = () => {
+  vDidPan = false
+  vDidSwipe = false
+  viewerTouchMoved = false
+}
 
 const resetViewerZoom = () => {
   viewerZoom.value = 1
@@ -455,14 +613,15 @@ const resetViewerZoom = () => {
 }
 
 const onViewerOverlayClick = () => {
-  if (!vDidPan) viewerDialog.value = false
-  vDidPan = false
+  if (!vDidPan && !vDidSwipe) viewerDialog.value = false
+  cleanupViewerGestureState()
 }
 
 const onViewerPanStart = (e) => {
   if (viewerZoom.value <= 1) return
   viewerPanning.value = true
   vDidPan = false
+  vDidSwipe = false
   vPanStartX = e.clientX
   vPanStartY = e.clientY
   vPanOriginX = viewerPanX.value
@@ -486,24 +645,136 @@ const onViewerPanEnd = () => {
   window.removeEventListener('mouseup', onViewerPanEnd)
 }
 
-const openViewer = async (file) => {
-  viewerDialog.value = true
-  viewerLoading.value = true
+const onViewerTouchStart = (event) => {
+  if (!event.touches?.length) return
+
+  const touch = event.touches[0]
+  viewerTouchStartX = touch.clientX
+  viewerTouchStartY = touch.clientY
+  viewerTouchMoved = false
+  vDidSwipe = false
+}
+
+const onViewerTouchMove = (event) => {
+  if (!event.touches?.length) return
+
+  const touch = event.touches[0]
+  const deltaX = touch.clientX - viewerTouchStartX
+  const deltaY = touch.clientY - viewerTouchStartY
+  if (Math.abs(deltaX) > 8 || Math.abs(deltaY) > 8) {
+    viewerTouchMoved = true
+  }
+}
+
+const goToAdjacentMedia = async (direction) => {
+  if (viewerLoading.value) return
+
+  const currentIndex = albumFiles.value.findIndex((file) => file.id === viewerFileId.value)
+  const nextIndex = currentIndex + direction
+  if (currentIndex < 0 || nextIndex < 0 || nextIndex >= albumFiles.value.length) return
+
+  const nextFile = albumFiles.value[nextIndex]
+  await loadViewerMedia(nextFile)
+}
+
+const goToPreviousMedia = () => goToAdjacentMedia(-1)
+
+const goToNextMedia = () => goToAdjacentMedia(1)
+
+const onViewerTouchEnd = (event) => {
+  if (!viewerTouchMoved) return
+
+  const touch = event.changedTouches?.[0]
+  if (!touch) return
+
+  const deltaX = touch.clientX - viewerTouchStartX
+  const deltaY = touch.clientY - viewerTouchStartY
+  const isHorizontalSwipe = Math.abs(deltaX) > 60 && Math.abs(deltaX) > Math.abs(deltaY) * 1.2
+
+  viewerTouchMoved = false
+  if (!isHorizontalSwipe) return
+
+  vDidSwipe = true
+  if (deltaX < 0) {
+    void goToNextMedia()
+  } else {
+    void goToPreviousMedia()
+  }
+}
+
+const onViewerTouchCancel = () => {
+  viewerTouchMoved = false
+}
+
+const onViewerDialogHide = () => {
+  viewerLoadToken += 1
+  onViewerPanEnd()
+  cleanupViewerGestureState()
+  revokeViewerUrl()
   viewerUrl.value = null
-  viewerIsVideo.value = file.is_video
-  viewerFilename.value = file.filename
+  viewerLoading.value = false
+  viewerFileId.value = null
+  viewerIsVideo.value = false
   resetViewerZoom()
+}
+
+const loadViewerMedia = async (file) => {
+  if (!file?.media_url) return false
+
+  const loadToken = ++viewerLoadToken
+  const previousUrl = viewerUrl.value
+  viewerLoading.value = true
+
   try {
     const res = await axios.get(buildMediaUrl(file.media_url, API), { responseType: 'text' })
     const blob = await decryptBlob(res.data, file.media_type)
-    viewerUrl.value = URL.createObjectURL(blob)
+
+    if (loadToken !== viewerLoadToken) {
+      return false
+    }
+
+    const nextUrl = URL.createObjectURL(blob)
+
+    if (loadToken !== viewerLoadToken) {
+      URL.revokeObjectURL(nextUrl)
+      return false
+    }
+
+    viewerUrl.value = nextUrl
+    viewerIsVideo.value = file.is_video
+    viewerFileId.value = file.id
+    resetViewerZoom()
+
+    if (previousUrl && previousUrl !== nextUrl) {
+      revokeViewerUrl(previousUrl)
+    }
+
+    return true
   } catch {
     $q.notify({ type: 'negative', message: 'Failed to decrypt media' })
-    viewerDialog.value = false
+    if (!previousUrl) {
+      viewerDialog.value = false
+      viewerFileId.value = null
+      viewerIsVideo.value = false
+    }
+    return false
   } finally {
-    viewerLoading.value = false
+    if (loadToken === viewerLoadToken) {
+      viewerLoading.value = false
+    }
   }
 }
+
+const openViewer = async (file) => {
+  viewerDialog.value = true
+  await loadViewerMedia(file)
+}
+
+onBeforeUnmount(() => {
+  viewerLoadToken += 1
+  onViewerPanEnd()
+  revokeViewerUrl()
+})
 
 const onViewerWheel = (e) => {
   const delta = e.deltaY > 0 ? -0.1 : 0.1
@@ -531,11 +802,12 @@ const onFilesSelected = async (event) => {
 
   uploading.value = true
   uploadProgress.value = 0
+  await nextTick()
 
   for (let i = 0; i < files.length; i++) {
     const file = files[i]
     try {
-      const isVideo = file.type.startsWith('video/')
+      const isVideo = isVideoFile(file)
 
       // Encrypt the file
       const { encryptedBlob, originalType } = await encryptBlob(file)
@@ -573,7 +845,7 @@ const onFilesSelected = async (event) => {
       const res = await axios.post(`${API}/albums/${currentAlbum.value.id}/files`, formData)
 
       // Add to list and cache a local thumb
-      albumFiles.value.unshift(res.data)
+      albumFiles.value = sortAlbumFilesByTimestamp([res.data, ...albumFiles.value])
       if (thumbnailBlob) {
         thumbCache[res.data.id] = URL.createObjectURL(thumbnailBlob)
       } else {
@@ -698,6 +970,7 @@ const formatSize = (bytes) => {
   width: 100%;
   height: 100%;
   padding: 48px 24px 24px;
+  position: relative;
 }
 .viewer-media {
   max-width: 90%;
@@ -717,5 +990,19 @@ const formatSize = (bytes) => {
   position: absolute;
   bottom: 16px;
   font-size: 13px;
+}
+.viewer-nav {
+  position: absolute;
+  top: 50%;
+  z-index: 11;
+  transform: translateY(-50%);
+  background: rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(4px);
+}
+.viewer-nav--left {
+  left: 12px;
+}
+.viewer-nav--right {
+  right: 12px;
 }
 </style>

@@ -473,7 +473,7 @@ import { useSettingsStore } from 'stores/settings'
 import { useUnreadStore } from 'stores/unread'
 import { useQuasar } from 'quasar'
 import { sendSignal, listenForSignal } from 'src/utils/fcm'
-import { generateImageThumbnail, generateVideoThumbnail } from 'src/utils/video'
+import { generateImageThumbnail, generateVideoThumbnail, isVideoFile } from 'src/utils/video'
 import axios from 'axios'
 
 const props = defineProps(['title', 'contactId', 'contactName', 'room'])
@@ -1144,7 +1144,7 @@ const onFileSelected = async (event) => {
 
   isUploading.value = true
   try {
-    const isVideo = file.type.startsWith('video/')
+    const isVideo = isVideoFile(file)
     const uploadFolder = chatUploadFolderByRoom[props.room] || props.room || ''
     const mediaUploadUrl = uploadFolder
       ? `https://fire.rftuning.id/media?folder=${encodeURIComponent(uploadFolder)}`

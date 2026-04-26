@@ -2,6 +2,29 @@
  * Generate a resized thumbnail from an image file.
  * Keeps the original image format when possible so existing mime handling stays valid.
  */
+const VIDEO_FILE_EXTENSIONS = [
+  '.mp4',
+  '.m4v',
+  '.mov',
+  '.webm',
+  '.3gp',
+  '.3gpp',
+  '.mkv',
+  '.avi',
+  '.ts',
+]
+
+export const isVideoFile = (file) => {
+  if (!file) return false
+
+  if (typeof file.type === 'string' && file.type.startsWith('video/')) {
+    return true
+  }
+
+  const fileName = typeof file.name === 'string' ? file.name.toLowerCase() : ''
+  return VIDEO_FILE_EXTENSIONS.some((extension) => fileName.endsWith(extension))
+}
+
 export const generateImageThumbnail = (imageFile, maxSize = 480) => {
   return new Promise((resolve, reject) => {
     const image = new Image()
